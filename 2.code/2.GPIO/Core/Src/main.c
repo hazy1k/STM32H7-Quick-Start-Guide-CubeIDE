@@ -1,52 +1,127 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2025 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "gpio.h"
 
-/* 函数声明 */
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include "bsp_init.h"
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+
+/* USER CODE BEGIN PV */
+
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MPU_Config(void);
-KEY_TypeDef Key_Scan(void);
+/* USER CODE BEGIN PFP */
 
-/* 全局变量 */
-uint8_t beep_status = 0; // 蜂鸣器状态
+/* USER CODE END PFP */
 
-/* 主函数 */
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+
+/* USER CODE END 0 */
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
 int main(void)
 {
+
+  /* USER CODE BEGIN 1 */
+  bsp_init();
+  /* USER CODE END 1 */
+
+  /* MPU Configuration--------------------------------------------------------*/
   MPU_Config();
+
+  /* MCU Configuration--------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
+
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
   SystemClock_Config();
-  MX_GPIO_Init();
+
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  /* USER CODE BEGIN 2 */
+  uint8_t key_value = 0;
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
   while (1)
   {
-	  KEY_TypeDef key = Key_Scan(); // 扫描按键
-	  switch(key)
+    /* USER CODE END WHILE */
+	  key_value = key_scan(0);
+	  switch(key_value)
 	  {
-	  	  case KEY_WK_UP:
-	  		  HAL_GPIO_WritePin(BEEP_GPIO_Port, BEEP_Pin, GPIO_PIN_SET); // 打开
-	          beep_status = 1;
-	          break;
-	      case KEY0:
-	          HAL_GPIO_WritePin(BEEP_GPIO_Port, BEEP_Pin, GPIO_PIN_RESET); // 关闭
-	          beep_status = 0;
-	          break;
-	      case KEY1:
-	          beep_status = !beep_status;
-	          HAL_GPIO_WritePin(BEEP_GPIO_Port, BEEP_Pin, beep_status ? GPIO_PIN_SET : GPIO_PIN_RESET); // 翻转
-	          break;
-	      default:
-	          break;
+	  	  case KEY0_PRES:
+	  	  {
+	  		  HAL_GPIO_TogglePin(LED_RED_Port, LED_RED_Pin);
+	  		  HAL_GPIO_WritePin(BEEP_GPIO_Port, BEEP_Pin, SET);
+	  		  break;
+	  	  }
+	  	  case KEY1_PRES:
+	  	  {
+	  		  HAL_GPIO_TogglePin(LED_BLUE_Port, LED_BLUE_Pin);
+	  		  HAL_GPIO_WritePin(BEEP_GPIO_Port, BEEP_Pin, RESET);
+	  		  break;
+	  	  }
+	  	  case WKUP_PRES:
+	  	  {
+	  		  HAL_GPIO_TogglePin(LED_GREEN_Port, LED_GREEN_Pin);
+	  		  break;
+	  	  }
+	  	  default:break;
 	  }
-	  /* 流水灯 */
-	  LED_OFF(LED_BLUE_GPIO_Port, LED_BLUE_Pin);
-	  LED_ON(LED_GREEN_GPIO_Port, LED_GREEN_Pin);
-	  HAL_Delay(100);
-	  LED_OFF(LED_GREEN_GPIO_Port, LED_GREEN_Pin);
-	  LED_ON(LED_RED_GPIO_Port, LED_RED_Pin);
-	  HAL_Delay(100);
-	  LED_OFF(LED_RED_GPIO_Port, LED_RED_Pin);
-	  LED_ON(LED_BLUE_GPIO_Port, LED_BLUE_Pin);
-	  HAL_Delay(100);
+    /* USER CODE BEGIN 3 */
   }
+  /* USER CODE END 3 */
 }
 
 /**
@@ -107,6 +182,11 @@ void SystemClock_Config(void)
   }
 }
 
+/* USER CODE BEGIN 4 */
+
+/* USER CODE END 4 */
+
+ /* MPU Configuration */
 
 void MPU_Config(void)
 {
@@ -133,47 +213,6 @@ void MPU_Config(void)
   /* Enables the MPU */
   HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
 
-}
-
-// 按键扫描函数，返回按下键值（一次只响应一次）
-KEY_TypeDef Key_Scan(void)
-{
-    static uint8_t key_up_wkup = 1; // 松手标志
-    static uint8_t key_up_key0 = 1;
-    static uint8_t key_up_key1 = 1;
-
-    // WKUP为高电平按下，其余为低电平按下
-    if (HAL_GPIO_ReadPin(WK_UP_GPIO_Port, WK_UP_Pin) == GPIO_PIN_SET)
-    {
-        if (key_up_wkup)  // 上一个循环没有按下，当前为按下
-        {
-            key_up_wkup = 0;
-            return KEY_WK_UP;
-        }
-    }
-    else key_up_wkup = 1;
-
-    if (HAL_GPIO_ReadPin(KEY0_GPIO_Port, KEY0_Pin) == GPIO_PIN_RESET)
-    {
-        if (key_up_key0)
-        {
-            key_up_key0 = 0;
-            return KEY0;
-        }
-    }
-    else key_up_key0 = 1;
-
-    if (HAL_GPIO_ReadPin(KEY1_GPIO_Port, KEY1_Pin) == GPIO_PIN_RESET)
-    {
-        if (key_up_key1)
-        {
-            key_up_key1 = 0;
-            return KEY1;
-        }
-    }
-    else key_up_key1 = 1;
-
-    return KEY_NONE;
 }
 
 /**

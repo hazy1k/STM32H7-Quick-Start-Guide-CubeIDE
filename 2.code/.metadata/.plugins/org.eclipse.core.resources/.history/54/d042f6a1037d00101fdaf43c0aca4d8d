@@ -1,0 +1,23 @@
+#ifndef __LED_H
+#define __LED_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include "stm32h7xx_hal.h"
+
+#define LED1_Pin GPIO_PIN_5  // 绿
+#define LED1_GPIO_Port GPIOE
+#define LED2_Pin GPIO_PIN_6  // 红
+#define LED2_GPIO_Port GPIOE
+#define LED0_Pin GPIO_PIN_4  // 蓝
+#define LED0_GPIO_Port GPIOB
+
+void MX_LED_GPIO_Init(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* __LED_H */
