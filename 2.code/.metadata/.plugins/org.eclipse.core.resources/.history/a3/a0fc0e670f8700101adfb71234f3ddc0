@@ -1,0 +1,54 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file    stm32h7xx_it.c
+  * @brief   Interrupt Service Routines.
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2025 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+#include "stm32h7xx_it.h"
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include "usart.h"
+#include "exti.h"
+#include "led.h"
+#include "tim.h"
+#include "stdio.h" // For printf function
+/* USER CODE END Includes */
+
+
+/* USER CODE BEGIN 1 */
+#if USE_UART_RX_IT
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART1)
+  {
+    // 计算下一个写入位置
+    uint16_t next_head = (rx_buffer.head + 1) % BUFFER_SIZE;
+
+    // 仅当缓冲区未满时存储数据
+    if (next_head != rx_buffer.tail)
+    {
+      rx_buffer.data[rx_buffer.head] = received_byte;
+      rx_buffer.head = next_head;
+    }
+
+    // 重新启用接收中断
+    HAL_UART_Receive_IT(&huart1, &received_byte, 1);
+  }
+}
+#endif
+/* USER CODE END 1 */

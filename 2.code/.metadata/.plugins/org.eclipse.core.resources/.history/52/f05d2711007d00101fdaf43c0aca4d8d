@@ -1,8 +1,0 @@
-#include "bsp_init.h"
-
-void bsp_init(void)
-{
-	void MX_LED_GPIO_Init(void);
-	void MX_BEEP_GPIO_Init(void);
-	void MX_KEY_GPIO_Init(void);
-}

@@ -1,0 +1,43 @@
+#ifndef __TIM_H
+#define __TIM_H
+
+#ifdef __cplusplus
+ extern "C" {
+#endif
+
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+
+/* USER CODE BEGIN Includes */
+
+/* USER CODE END Includes */
+
+// extern 声明所有全局变量
+extern TIM_HandleTypeDef htim1;
+extern TIM_HandleTypeDef htim12;
+
+extern volatile uint8_t g_timxchy_pwmin_sta;
+extern volatile uint16_t g_timxchy_pwmin_psc;
+extern volatile uint32_t g_timxchy_pwmin_hval;
+extern volatile uint32_t g_timxchy_pwmin_cval;
+
+// extern 声明所有函数
+void MX_TIM12_Init(void); // TIM12 PWM输出的初始化
+
+void atim_timx_pwmin_chy_init(void);
+void atim_timx_pwmin_chy_restart(void);
+
+// 辅助函数
+void Start_PWM_Output(void);
+void Stop_PWM_Output(void);
+void Set_PWM_Output(uint32_t frequency, float duty_cycle);
+
+/* USER CODE BEGIN Prototypes */
+
+/* USER CODE END Prototypes */
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* __TIM_H */

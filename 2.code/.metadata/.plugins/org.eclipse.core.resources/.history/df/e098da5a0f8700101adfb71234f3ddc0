@@ -1,0 +1,400 @@
+#include "tim.h" // 包含tim.h以获取所有外部声明
+#include "stdio.h"
+#include "usart.h" // 假设usart.h定义了printf所需的UART配置
+
+/* USER CODE BEGIN 0 */
+
+// 定义全局变量用于PWM输入模式
+TIM_HandleTypeDef g_timx_pwmin_chy_handle; /* 定时器x句柄 */
+
+/* PWM输入状态
+ * 0,没有成功捕获.
+ * 1,已经成功捕获了
+ */
+volatile uint8_t g_timxchy_pwmin_sta = 0;    /* PWM输入状态 */
+volatile uint16_t g_timxchy_pwmin_psc = 0;   /* PWM输入分频系数 */
+volatile uint32_t g_timxchy_pwmin_hval = 0;  /* PWM的高电平脉宽 */
+volatile uint32_t g_timxchy_pwmin_cval = 0;  /* PWM的周期宽度 */
+
+// HAL库定时器句柄 (定义在这里，tim.h中extern声明)
+TIM_HandleTypeDef htim1;
+TIM_HandleTypeDef htim12;
+
+/* USER CODE END 0 */
+
+
+/* TIM12 init function (PWM Output) */
+void MX_TIM12_Init(void)
+{
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  htim12.Instance = TIM12;
+  htim12.Init.Prescaler = 479; // 定时器时钟240MHz / (479+1) = 0.5MHz, 1 tick = 2us
+                               // 或者如果APB1是120M，那么TIM12是240M，Prescaler=479，则1us/tick (240MHz/(479+1))
+                               // 这里我们根据你的注释来调整，如果TIM12也是240MHz时钟源
+                               // 480MHz / 2 (HCLK_DIV2) = 240MHz (APB1)
+                               // TIM12 CLK = 240MHz * 2 = 480MHz (如果APB1 Prescaler不是1,且TIM_ADV_FLAG)
+                               // 或者 TIM12 CLK = 240MHz (如果APB1 Prescaler是1)
+                               // 这里假设APB1时钟是240MHz，TIM12时钟是240MHz
+                               // 为了得到1us/tick (1MHz计数频率)，Prescaler = 240 - 1 = 239;
+                               // 这里我将按照你之前的Prescaler=479来，假设TIM时钟源是480MHz，那么1us/tick
+  htim12.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim12.Init.Period = 99; // 10KHz PWM (1MHz / (99+1) = 10KHz)
+  htim12.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim12.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  if (HAL_TIM_Base_Init(&htim12) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim12, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim12) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim12, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 50; // 50%占空比 (50 / 100 * 100%)
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_ENABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim12, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  // HAL_TIM_MspPostInit for htim12 is automatically called by HAL_TIM_PWM_Init or can be placed here
+  // We define HAL_TIM_MspPostInit below to handle specific GPIO for TIM12
+}
+
+
+/* 定时器TIMX 通道Y PWM输入模式 初始化函数 (替换MX_TIM1_Init) */
+void atim_timx_pwmin_chy_init(void)
+{
+    GPIO_InitTypeDef gpio_init_struct = {0};
+    TIM_SlaveConfigTypeDef slave_config = {0};
+    TIM_IC_InitTypeDef tim_ic_pwmin_chy = {0};
+
+    // TIM1 时钟使能 (代替ATIM_TIMX_PWMIN_CHY_CLK_ENABLE)
+    __HAL_RCC_TIM1_CLK_ENABLE();
+    // GPIOE 时钟使能 (代替ATIM_TIMX_PWMIN_CHY_GPIO_CLK_ENABLE)
+    __HAL_RCC_GPIOE_CLK_ENABLE();
+
+    gpio_init_struct.Pin = GPIO_PIN_9; // PE9 (代替ATIM_TIMX_PWMIN_CHY_GPIO_PIN)
+    gpio_init_struct.Mode = GPIO_MODE_AF_PP; // 必须是输入模式
+    gpio_init_struct.Pull = GPIO_PULLDOWN;       // 使用下拉电阻防止浮空
+    gpio_init_struct.Speed = GPIO_SPEED_FREQ_VERY_HIGH; // 保持高速
+    gpio_init_struct.Alternate = GPIO_AF1_TIM1; // TIM1_CH1的复用功能 (代替ATIM_TIMX_PWMIN_CHY_GPIO_AF)
+    HAL_GPIO_Init(GPIOE, &gpio_init_struct); // GPIOE (代替ATIM_TIMX_PWMIN_CHY_GPIO_PORT)
+
+    g_timx_pwmin_chy_handle.Instance = TIM1; // TIM1实例 (代替ATIM_TIMX_PWMIN)
+    g_timx_pwmin_chy_handle.Init.Prescaler = 0;                             /* 定时器预分频系数 */
+    g_timx_pwmin_chy_handle.Init.CounterMode = TIM_COUNTERMODE_UP;          /* 递增计数模式 */
+    g_timx_pwmin_chy_handle.Init.Period = 65535;                            /* 自动重装载值 (16位最大值) */
+    g_timx_pwmin_chy_handle.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+    g_timx_pwmin_chy_handle.Init.RepetitionCounter = 0;
+    g_timx_pwmin_chy_handle.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE; // PWM输入模式下通常不需要ARPE
+
+    // HAL_TIM_Base_Init (基本定时器功能初始化)
+    if (HAL_TIM_Base_Init(&g_timx_pwmin_chy_handle) != HAL_OK)
+    {
+        Error_Handler();
+    }
+    // HAL_TIM_IC_Init (输入捕获模式初始化)
+    if (HAL_TIM_IC_Init(&g_timx_pwmin_chy_handle) != HAL_OK)
+    {
+        Error_Handler();
+    }
+
+    /* 从模式配置,TI1FP1触发更新 */
+    slave_config.SlaveMode = TIM_SLAVEMODE_RESET;                           /* 从模式: 复位模式 */
+    slave_config.InputTrigger = TIM_TS_TI1FP1;                              /* 定时器输入触发源: TI1FP1 */
+    slave_config.TriggerPolarity = TIM_INPUTCHANNELPOLARITY_RISING;         /* 上升沿检测 */
+    slave_config.TriggerFilter = 0;                                         /* 不滤波 */
+    if (HAL_TIM_SlaveConfigSynchronization(&g_timx_pwmin_chy_handle, &slave_config) != HAL_OK)
+    {
+        Error_Handler();
+    }
+
+    /* IC1捕获：上升沿触发TI1FP1 */
+    tim_ic_pwmin_chy.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;          /* 上升沿检测 */
+    tim_ic_pwmin_chy.ICSelection = TIM_ICSELECTION_DIRECTTI;                /* 选择输入端 IC1映射到TI1上 */
+    tim_ic_pwmin_chy.ICPrescaler = TIM_ICPSC_DIV1;                          /* 不分频 */
+    tim_ic_pwmin_chy.ICFilter = 0;                                          /* 不滤波 */
+    if (HAL_TIM_IC_ConfigChannel(&g_timx_pwmin_chy_handle, &tim_ic_pwmin_chy, TIM_CHANNEL_1) != HAL_OK)
+    {
+        Error_Handler();
+    }
+
+    /* IC2捕获：下降沿触发TI1FP2 */
+    tim_ic_pwmin_chy.ICPolarity = TIM_INPUTCHANNELPOLARITY_FALLING;         /* 下降沿检测 */
+    tim_ic_pwmin_chy.ICSelection = TIM_ICSELECTION_INDIRECTTI;              /* 选择输入端 IC2映射到TI1上 */
+    if (HAL_TIM_IC_ConfigChannel(&g_timx_pwmin_chy_handle, &tim_ic_pwmin_chy, TIM_CHANNEL_2) != HAL_OK)
+    {
+        Error_Handler();
+    }
+
+    // NVIC 中断优先级设置 (替换ATIM_TIMX_PWMIN_IRQn 和 ATIM_TIMX_PWMIN_CC_IRQn)
+    HAL_NVIC_SetPriority(TIM1_UP_IRQn, 1, 3); // TIM1更新中断
+    HAL_NVIC_EnableIRQ(TIM1_UP_IRQn);
+    HAL_NVIC_SetPriority(TIM1_CC_IRQn, 1, 3); // TIM1捕获/比较中断 (包含CC1和CC2)
+    HAL_NVIC_EnableIRQ(TIM1_CC_IRQn);
+
+    // 使能更新中断和捕获中断
+    __HAL_TIM_ENABLE_IT(&g_timx_pwmin_chy_handle, TIM_IT_UPDATE);
+    HAL_TIM_IC_Start_IT(&g_timx_pwmin_chy_handle, TIM_CHANNEL_1);
+    HAL_TIM_IC_Start_IT(&g_timx_pwmin_chy_handle, TIM_CHANNEL_2);
+}
+
+/* 定时器TIMX PWM输入模式 重新启动捕获 */
+void atim_timx_pwmin_chy_restart(void)
+{
+    __disable_irq(); // 替换sys_intx_disable()
+    g_timxchy_pwmin_sta = 0;                                        /* 清零状态,重新开始检测 */
+    g_timxchy_pwmin_psc = 0;                                        /* 分频系数清零 */
+    __HAL_TIM_SET_PRESCALER(&g_timx_pwmin_chy_handle, 0);           /* 以最大的计数频率采集,以得到最好的精度 */
+    __HAL_TIM_SET_COUNTER(&g_timx_pwmin_chy_handle, 0);             /* 计数器清零 */
+
+    // 使能通道1和通道2的捕获中断
+    __HAL_TIM_ENABLE_IT(&g_timx_pwmin_chy_handle, TIM_IT_CC1);
+    __HAL_TIM_ENABLE_IT(&g_timx_pwmin_chy_handle, TIM_IT_CC2);
+    __HAL_TIM_ENABLE_IT(&g_timx_pwmin_chy_handle, TIM_IT_UPDATE);   /* 使能溢出中断 */
+    __HAL_TIM_ENABLE(&g_timx_pwmin_chy_handle);                     /* 使能定时器TIMX */
+    g_timx_pwmin_chy_handle.Instance->SR = 0;                       /* 清除所有中断标志位 */
+    __enable_irq(); // 替换sys_intx_enable()
+}
+
+
+/* 定时器TIMX 通道Y PWM输入模式 中断处理函数 */
+static void atim_timx_pwmin_chy_process(void)
+{
+    static uint8_t sflag = 0;               /* 启动PWMIN输入检测标志 */
+    if (g_timxchy_pwmin_sta) // 如果已经成功捕获，则直接复位中断标志
+    {
+        g_timxchy_pwmin_psc = 0; // 重置动态分频系数
+        g_timx_pwmin_chy_handle.Instance->SR = 0; // 清除所有中断标志位
+        __HAL_TIM_SET_COUNTER(&g_timx_pwmin_chy_handle, 0); // 计数器清零
+        return;
+    }
+
+    // 处理溢出中断
+    if (__HAL_TIM_GET_FLAG(&g_timx_pwmin_chy_handle, TIM_FLAG_UPDATE))
+    {
+        __HAL_TIM_CLEAR_FLAG(&g_timx_pwmin_chy_handle, TIM_FLAG_UPDATE); // 清除溢出中断标记
+
+        // 如果没有发生CC1捕获中断 (即没有检测到上升沿)
+        if (__HAL_TIM_GET_FLAG(&g_timx_pwmin_chy_handle, TIM_FLAG_CC1) == 0)
+        {
+            sflag = 0; // 重置sflag
+            if (g_timxchy_pwmin_psc == 0)   /* 从0 到 1 */
+            {
+                g_timxchy_pwmin_psc = 1; // 第一次溢出后，分频系数设为1
+            }
+            else
+            {
+                if (g_timxchy_pwmin_psc == 65535)               /* 已经最大了, 可能是无输入状态或极低频 */
+                {
+                    g_timxchy_pwmin_psc = 0;                    /* 重新恢复不分频 (实际是下一次设为1) */
+                }
+                else if (g_timxchy_pwmin_psc > 32767)           /* 不能倍增了 (避免溢出) */
+                {
+                    g_timxchy_pwmin_psc = 65535;                /* 直接等于最大分频系数 */
+                }
+                else
+                {
+                    g_timxchy_pwmin_psc += g_timxchy_pwmin_psc; /* 倍增 */
+                }
+            }
+            __HAL_TIM_SET_PRESCALER(&g_timx_pwmin_chy_handle, g_timxchy_pwmin_psc); /* 设置定时器预分频系数 */
+            __HAL_TIM_SET_COUNTER(&g_timx_pwmin_chy_handle, 0);                     /* 计数器清零 */
+            g_timx_pwmin_chy_handle.Instance->SR = 0;                               /* 清除所有中断标志位 */
+            return;
+        }
+    }
+
+    // 处理CC1和CC2捕获中断
+    if (sflag == 0) // 如果是第一次捕获到上升沿 (一个周期的开始)
+    {
+        if (__HAL_TIM_GET_FLAG(&g_timx_pwmin_chy_handle, TIM_FLAG_CC1))
+        {
+            sflag = 1;              /* 标记第一次周期已经捕获 */
+        }
+        g_timx_pwmin_chy_handle.Instance->SR = 0; // 清除所有中断标志位
+        return;
+    }
+
+    // 如果sflag为1，且还没有成功捕获
+    if (g_timxchy_pwmin_sta == 0)
+    {
+        if (__HAL_TIM_GET_FLAG(&g_timx_pwmin_chy_handle, TIM_FLAG_CC1)) // 检测到了第二个上升沿 (周期结束)
+        {
+            g_timxchy_pwmin_hval = HAL_TIM_ReadCapturedValue(&g_timx_pwmin_chy_handle, TIM_CHANNEL_2); /* 高定平脉宽捕获值 */
+            g_timxchy_pwmin_cval = HAL_TIM_ReadCapturedValue(&g_timx_pwmin_chy_handle, TIM_CHANNEL_1); /* 周期捕获值 */
+
+            // 由于TIM_SLAVEMODE_RESET，每个上升沿都会重置CNT，
+            // 所以CCR1捕获的是周期（从上升沿到下一个上升沿），CCR2捕获的是高电平脉宽（从上升沿到下降沿）。
+            // 因此g_timxchy_pwmin_hval (CCR2) 应该总是小于 g_timxchy_pwmin_cval (CCR1)。
+            if (g_timxchy_pwmin_hval < g_timxchy_pwmin_cval)
+            {
+                g_timxchy_pwmin_sta = 1;                        /* 标记捕获成功 */
+                g_timxchy_pwmin_psc = g_timx_pwmin_chy_handle.Instance->PSC;     /* 获取PWM输入分频系数 */
+
+                // 这里你的原始代码有对g_timxchy_pwmin_hval和g_timxchy_pwmin_cval的修正，
+                // 如果PSC为0，则加1。这可能是因为计数器0时不触发捕获，或者特定硬件行为。
+                // 暂时保留，但要注意其具体含义。对于HAL库通常不需要+1。
+                if (g_timxchy_pwmin_psc == 0)
+                {
+                    g_timxchy_pwmin_hval++;
+                    g_timxchy_pwmin_cval++;
+                }
+                sflag = 0; // 重置sflag
+
+                // 每次捕获PWM输入成功后, 停止捕获,避免频繁中断影响系统正常代码运行
+                g_timx_pwmin_chy_handle.Instance->CR1 &= ~(1 << 0); // 关闭定时器TIM1
+                __HAL_TIM_DISABLE_IT(&g_timx_pwmin_chy_handle, TIM_IT_CC1);     /* 关闭通道1捕获中断 */
+                __HAL_TIM_DISABLE_IT(&g_timx_pwmin_chy_handle, TIM_IT_CC2);     /* 关闭通道2捕获中断 */
+                __HAL_TIM_DISABLE_IT(&g_timx_pwmin_chy_handle, TIM_IT_UPDATE);  /* 关闭溢出中断 */
+                g_timx_pwmin_chy_handle.Instance->SR = 0;                       /* 清除所有中断标志位 */
+            }
+            else // 捕获数据异常，重新开始
+            {
+                atim_timx_pwmin_chy_restart();
+            }
+        }
+    }
+    g_timx_pwmin_chy_handle.Instance->SR = 0; // 再次清除所有中断标志位
+}
+
+/* 定时器TIMX 更新/溢出 中断服务函数 (对应TIM1_UP_IRQn) */
+void TIM1_UP_TIM10_IRQHandler(void) // 对应STM32H750VBTX的TIM1更新中断函数名
+{
+    HAL_TIM_IRQHandler(&g_timx_pwmin_chy_handle); // 处理HAL库的更新中断标志
+    atim_timx_pwmin_chy_process();
+}
+
+/* 定时器TIMX 输入捕获 中断服务函数 (对应TIM1_CC_IRQn) */
+void TIM1_CC_IRQHandler(void) // 对应STM32H750VBTX的TIM1捕获/比较中断函数名
+{
+    HAL_TIM_IRQHandler(&g_timx_pwmin_chy_handle); // 处理HAL库的CC中断标志
+    atim_timx_pwmin_chy_process();
+}
+
+
+/* 辅助函数定义 */
+
+/* 启动PWM输出 (TIM12) */
+void Start_PWM_Output(void)
+{
+  HAL_TIM_PWM_Start(&htim12, TIM_CHANNEL_1);
+}
+
+/* 停止PWM输出 (TIM12) */
+void Stop_PWM_Output(void)
+{
+  HAL_TIM_PWM_Stop(&htim12, TIM_CHANNEL_1);
+}
+
+/* 设置PWM输出频率和占空比 (TIM12) */
+void Set_PWM_Output(uint32_t frequency, float duty_cycle)
+{
+  Stop_PWM_Output();
+
+  // 定时器时钟为1MHz (基于htim12.Init.Prescaler = 479，假设TIM12时钟是480MHz)
+  uint32_t arr_value = 0;
+  if (frequency > 0)
+  {
+      arr_value = (1000000 / frequency) - 1;
+  }
+  else
+  {
+      arr_value = 99; // 默认10KHz
+  }
+
+  if (arr_value < 1) arr_value = 1;
+
+  uint32_t ccr_value = (uint32_t)((float)(arr_value + 1) * duty_cycle / 100.0f);
+
+  if (ccr_value > arr_value) ccr_value = arr_value;
+
+  __HAL_TIM_SET_AUTORELOAD(&htim12, arr_value);
+  __HAL_TIM_SET_COMPARE(&htim12, TIM_CHANNEL_1, ccr_value);
+
+  HAL_TIM_PWM_Start(&htim12, TIM_CHANNEL_1);
+}
+
+
+/* HAL库 MSP 初始化回调函数 (替换CubeMX生成的) */
+void HAL_TIM_Base_MspInit(TIM_HandleTypeDef* tim_baseHandle)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  // TIM1的MspInit (PWM输入)
+  if(tim_baseHandle->Instance == TIM1)
+  {
+    __HAL_RCC_TIM1_CLK_ENABLE();
+    __HAL_RCC_GPIOE_CLK_ENABLE(); // PE9时钟使能
+
+    // PE9 GPIO配置
+    GPIO_InitStruct.Pin = GPIO_PIN_9; // PE9
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF1_TIM1; // TIM1_CH1的AF
+    HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+
+    // NVIC 中断优先级设置
+    HAL_NVIC_SetPriority(TIM1_UP_IRQn, 1, 3); // 更新中断
+    HAL_NVIC_EnableIRQ(TIM1_UP_IRQn);
+    HAL_NVIC_SetPriority(TIM1_CC_IRQn, 1, 3); // 捕获/比较中断
+    HAL_NVIC_EnableIRQ(TIM1_CC_IRQn);
+  }
+  // TIM12的MspInit (PWM输出)
+  else if(tim_baseHandle->Instance == TIM12)
+  {
+    __HAL_RCC_TIM12_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE(); // PB14时钟使能
+
+    // PB14 GPIO配置
+    GPIO_InitStruct.Pin = GPIO_PIN_14; // PB14
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF2_TIM12; // TIM12_CH1的AF
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  }
+}
+
+// HAL_TIM_MspPostInit (通常用于配置互补通道，这里不需要，但为了HAL结构完整，保留空的)
+void HAL_TIM_MspPostInit(TIM_HandleTypeDef* timHandle)
+{
+  // 这里可以处理TIM1和TIM12各自的MspPostInit逻辑，但你的原始代码将其合并到Base_MspInit了
+  // 如果CubeMX生成了这个函数，确保它不重复配置GPIO
+  (void)timHandle; // 避免未使用的参数警告
+}
+
+// HAL库 MSP 去初始化回调函数
+void HAL_TIM_Base_MspDeInit(TIM_HandleTypeDef* tim_baseHandle)
+{
+  // TIM1的MspDeInit
+  if(tim_baseHandle->Instance == TIM1)
+  {
+    __HAL_RCC_TIM1_CLK_DISABLE();
+    HAL_GPIO_DeInit(GPIOE, GPIO_PIN_9); // PE9
+    HAL_NVIC_DisableIRQ(TIM1_UP_IRQn);
+    HAL_NVIC_DisableIRQ(TIM1_CC_IRQn);
+  }
+  // TIM12的MspDeInit
+  else if(tim_baseHandle->Instance == TIM12)
+  {
+    __HAL_RCC_TIM12_CLK_DISABLE();
+    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_14); // PB14
+  }
+}

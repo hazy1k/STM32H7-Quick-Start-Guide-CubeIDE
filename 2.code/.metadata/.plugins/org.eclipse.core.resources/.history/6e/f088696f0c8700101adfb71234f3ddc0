@@ -1,0 +1,318 @@
+#include "tim.h"
+#include "main.h"
+#include "stdio.h"
+#include "usart.h" // 确保usart.h包含了printf所需的UART配置
+
+// 定义全局变量用于PWM测量
+volatile uint32_t IC_Value1 = 0;
+volatile uint32_t IC_Value2 = 0;
+volatile uint32_t IC_Value3 = 0;
+volatile uint32_t DutyCycle = 0; // 高电平时间
+volatile uint32_t Frequency = 0;
+volatile uint8_t capture_state = 0;  // 0:等待第一个上升沿, 1:等待下降沿, 2:等待第二个上升沿
+
+TIM_HandleTypeDef htim1;
+TIM_HandleTypeDef htim12;
+
+/* TIM1 init function */
+void MX_TIM1_Init(void)
+{
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_IC_InitTypeDef sConfigIC = {0};
+
+  htim1.Instance = TIM1;
+  htim1.Init.Prescaler = 479; // 480MHz / (479+1) = 1MHz, 1 tick = 1us
+  htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim1.Init.Period = 0xFFFF; // 16位计数器最大值，Period设置为0xFFFF允许计数到65535。
+                            // 实际捕获周期或脉宽可能超过65535个tick。
+                            // 如果需要测量更长的周期，应将Period设置为0xFFFFFFFF（32位最大）。
+                            // 但HAL库中htim1.Init.Period是uint32_t，所以0xFFFF是合法的，
+                            // 只是限制了单个周期或脉宽不能超过65535us。
+                            // 对于10KHz PWM，周期是100us，0xFFFF足够。
+  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim1.Init.RepetitionCounter = 0;
+  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE; // ENABLE对于IC模式影响不大，但通常是默认的。
+                                                              // 在IC模式，我们关心捕获值，而不是ARR更新。
+  if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_IC_Init(&htim1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterOutputTrigger2 = TIM_TRGO2_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING; // 初始设置为上升沿捕获
+  sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
+  sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
+  sConfigIC.ICFilter = 4; // 增加滤波
+  if (HAL_TIM_IC_ConfigChannel(&htim1, &sConfigIC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/* TIM12 init function */
+void MX_TIM12_Init(void)
+{
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  htim12.Instance = TIM12;
+  htim12.Init.Prescaler = 479; // 1us/tick
+  htim12.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim12.Init.Period = 99; // 10KHz PWM (1MHz / (99+1) = 10KHz)
+  htim12.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim12.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  if (HAL_TIM_Base_Init(&htim12) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim12, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim12) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim12, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 50; // 50%占空比 (50 / 100 * 100%)
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_ENABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim12, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  HAL_TIM_MspPostInit(&htim12);
+}
+
+void HAL_TIM_Base_MspInit(TIM_HandleTypeDef* tim_baseHandle)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  if(tim_baseHandle->Instance==TIM1)
+  {
+    __HAL_RCC_TIM1_CLK_ENABLE();
+    __HAL_RCC_GPIOE_CLK_ENABLE(); // 确保PE9时钟使能
+    GPIO_InitStruct.Pin = PWM_CH1IN_Pin; // PE9
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF1_TIM1; // TIM1_CH1的复用功能
+    HAL_GPIO_Init(PWM_CH1IN_GPIO_Port, &GPIO_InitStruct);
+
+    HAL_NVIC_SetPriority(TIM1_UP_IRQn, 2, 0); // TIM1更新中断
+    HAL_NVIC_EnableIRQ(TIM1_UP_IRQn);
+    HAL_NVIC_SetPriority(TIM1_CC_IRQn, 1, 0); // TIM1捕获/比较中断
+    HAL_NVIC_EnableIRQ(TIM1_CC_IRQn);
+  }
+  else if(tim_baseHandle->Instance==TIM12)
+  {
+    __HAL_RCC_TIM12_CLK_ENABLE(); // 确保TIM12时钟使能
+  }
+}
+
+void HAL_TIM_MspPostInit(TIM_HandleTypeDef* timHandle)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  if(timHandle->Instance==TIM12)
+  {
+    __HAL_RCC_GPIOB_CLK_ENABLE(); // 确保PB14时钟使能
+    GPIO_InitStruct.Pin = PWM_CH1_Pin; // PB14
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF2_TIM12; // TIM12_CH1的复用功能
+    HAL_GPIO_Init(PWM_CH1_GPIO_Port, &GPIO_InitStruct);
+  }
+}
+
+void HAL_TIM_Base_MspDeInit(TIM_HandleTypeDef* tim_baseHandle)
+{
+  if(tim_baseHandle->Instance==TIM1)
+  {
+    __HAL_RCC_TIM1_CLK_DISABLE();
+    HAL_GPIO_DeInit(PWM_CH1IN_GPIO_Port, PWM_CH1IN_Pin);
+    HAL_NVIC_DisableIRQ(TIM1_UP_IRQn);
+    HAL_NVIC_DisableIRQ(TIM1_CC_IRQn);
+  }
+  else if(tim_baseHandle->Instance==TIM12)
+  {
+    __HAL_RCC_TIM12_CLK_DISABLE();
+  }
+}
+
+// TIM输入捕获中断处理回调函数
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
+{
+  if (htim->Instance == TIM1 && htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1) // 确保是TIM1的CH1中断
+  {
+    switch(capture_state)
+    {
+      case 0: // 第一个上升沿
+        IC_Value1 = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);
+        capture_state = 1;
+        // 改变极性为下降沿捕获
+        __HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_FALLING);
+        break;
+      case 1: // 下降沿 (高电平结束)
+        IC_Value2 = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);
+        // 计算高电平时间
+        if (IC_Value2 > IC_Value1)
+        {
+          DutyCycle = IC_Value2 - IC_Value1; // DutyCycle这里存储的是高电平时间 (单位us)
+        }
+        else // 溢出处理，虽然Period=0xFFFF，但理论上可能发生
+        {
+          DutyCycle = (0xFFFF - IC_Value1 + 1) + IC_Value2;
+        }
+        capture_state = 2;
+        // 改变极性为上升沿捕获，准备捕获下一个周期的起始
+        __HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_RISING);
+        break;
+      case 2: // 第二个上升沿 (下一个周期的起始)
+        IC_Value3 = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);
+        uint32_t Period_ticks;
+        // 计算PWM周期 (单位us)
+        if (IC_Value3 > IC_Value1)
+        {
+          Period_ticks = IC_Value3 - IC_Value1;
+        }
+        else // 溢出处理
+        {
+          Period_ticks = (0xFFFF - IC_Value1 + 1) + IC_Value3;
+        }
+
+        // 计算频率 (定时器时钟为1MHz，所以Period_ticks单位就是us)
+        if (Period_ticks > 0)
+        {
+            Frequency = 1000000 / Period_ticks; // 频率单位Hz
+        }
+        else
+        {
+            Frequency = 0; // 避免除以零
+        }
+
+        // 计算占空比百分比
+        float duty_cycle_percent = 0.0f;
+        if (Period_ticks > 0)
+        {
+            duty_cycle_percent = (float)DutyCycle / Period_ticks * 100.0f;
+        }
+        else
+        {
+            duty_cycle_percent = 0.0f;
+        }
+
+        // 打印PWM信息
+        printf("PWM Freq: %lu Hz, Duty: %.2f%%\r\n", Frequency, duty_cycle_percent);
+
+        capture_state = 0; // 重置状态，准备下一次完整的测量
+        break;
+    }
+  }
+}
+
+// TIM1更新中断回调函数 (用于处理长时间无信号或捕获溢出)
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance == TIM1)
+    {
+        // 如果在等待下降沿（capture_state == 1）时发生溢出，说明脉冲太长
+        // 或者在等待第二个上升沿（capture_state == 2）时发生溢出，说明周期太长
+        // 这种情况下，可以认为测量失败或超时
+        if (capture_state == 1 || capture_state == 2)
+        {
+            printf("PWM capture timeout or overflow!\r\n");
+            // 重置捕获状态，准备下一次测量
+            capture_state = 0;
+            __HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_RISING); // 切换回上升沿
+        }
+    }
+}
+
+
+// 启动PWM输入捕获
+void Start_PWM_Input_Capture(void)
+{
+  // 先停止可能正在运行的捕获
+  HAL_TIM_IC_Stop_IT(&htim1, TIM_CHANNEL_1);
+  // 重置状态和捕获值
+  capture_state = 0;
+  IC_Value1 = 0;
+  IC_Value2 = 0;
+  IC_Value3 = 0;
+  DutyCycle = 0;
+  Frequency = 0;
+  // 设置为上升沿捕获
+  __HAL_TIM_SET_CAPTUREPOLARITY(&htim1, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_RISING);
+  // 启动输入捕获中断
+  HAL_TIM_IC_Start_IT(&htim1, TIM_CHANNEL_1);
+}
+
+// 启动PWM输出
+void Start_PWM_Output(void)
+{
+  HAL_TIM_PWM_Start(&htim12, TIM_CHANNEL_1);
+}
+
+// 停止PWM输出
+void Stop_PWM_Output(void)
+{
+  HAL_TIM_PWM_Stop(&htim12, TIM_CHANNEL_1);
+}
+
+// 设置PWM输出频率和占空比
+void Set_PWM_Output(uint32_t frequency, float duty_cycle)
+{
+  // 停止PWM输出
+  Stop_PWM_Output();
+
+  // 定时器时钟为1MHz (480MHz/(479+1))
+  // 计算新的ARR和CCR值
+  uint32_t arr_value = 0;
+  if (frequency > 0)
+  {
+      arr_value = (1000000 / frequency) - 1;
+  }
+  else
+  {
+      // 避免除以零，或者设置一个默认频率
+      arr_value = 99; // 默认10KHz
+  }
+
+  // 防止arr_value过小导致Pulse计算不正确或溢出
+  if (arr_value < 1) arr_value = 1;
+
+  uint32_t ccr_value = (uint32_t)((float)(arr_value + 1) * duty_cycle / 100.0f);
+
+  // 防止ccr_value超过arr_value
+  if (ccr_value > arr_value) ccr_value = arr_value;
+
+  // 设置新的ARR和CCR值
+  __HAL_TIM_SET_AUTORELOAD(&htim12, arr_value);
+  __HAL_TIM_SET_COMPARE(&htim12, TIM_CHANNEL_1, ccr_value);
+
+  // 重新启动PWM输出
+  HAL_TIM_PWM_Start(&htim12, TIM_CHANNEL_1);
+}
